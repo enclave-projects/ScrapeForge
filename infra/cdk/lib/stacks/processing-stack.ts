@@ -77,6 +77,17 @@ export class ProcessingStack extends Stack {
         ],
       })
     )
+    // Separate from InvokeModel: gates whether bearer-token (long-term
+    // API key) auth is allowed at all, not tied to a specific model ARN
+    // - confirmed by testing the key directly against the Converse API
+    // (403 bedrock:CallWithBearerToken without this, even with
+    // InvokeModel already granted).
+    this.bedrockApiKeyUser.addToPolicy(
+      new iam.PolicyStatement({
+        actions: ["bedrock:CallWithBearerToken"],
+        resources: ["*"],
+      })
+    )
 
     this.bedrockApiKeySecret = new secretsmanager.Secret(
       this,
