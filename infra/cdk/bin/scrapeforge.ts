@@ -64,6 +64,9 @@ new StorageStack(app, stackName("StorageStack"), {
   env,
   tags,
   vpc: network.vpc,
+  // OpenSearch + Aurora deliberately held back until ProcessingStack
+  // actually needs them — see StorageStack's prop doc comment.
+  deployOpenSearchAndAurora: false,
 })
 
 new DeliveryStack(app, stackName("DeliveryStack"), { env, tags })

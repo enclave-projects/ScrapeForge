@@ -10,11 +10,19 @@ import * as s3 from "aws-cdk-lib/aws-s3"
 import * as dynamodb from "aws-cdk-lib/aws-dynamodb"
 import * as opensearch from "aws-cdk-lib/aws-opensearchservice"
 import * as rds from "aws-cdk-lib/aws-rds"
-import * as secretsmanager from "aws-cdk-lib/aws-secretsmanager"
 import type { Construct } from "constructs"
 
 export interface StorageStackProps extends StackProps {
   vpc: ec2.IVpc
+  /**
+   * OpenSearch and Aurora are real fixed-cost resources (~$72/mo
+   * combined, no scale-to-zero) with nothing consuming them yet
+   * (ProcessingStack doesn't exist). Defaults false so S3+DynamoDB can
+   * deploy alone; flip true once ready to bring the rest online — this
+   * only ever adds resources to the stack, never removes the ones
+   * already deployed.
+   */
+  deployOpenSearchAndAurora?: boolean
 }
 
 /**
@@ -34,8 +42,8 @@ export class StorageStack extends Stack {
   public readonly rawBucket: s3.Bucket
   public readonly markdownBucket: s3.Bucket
   public readonly pageMetadataTable: dynamodb.Table
-  public readonly openSearchDomain: opensearch.Domain
-  public readonly auroraCluster: rds.DatabaseCluster
+  public readonly openSearchDomain?: opensearch.Domain
+  public readonly auroraCluster?: rds.DatabaseCluster
 
   constructor(scope: Construct, id: string, props: StorageStackProps) {
     super(scope, id, props)
@@ -77,6 +85,18 @@ export class StorageStack extends Stack {
       billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
       removalPolicy: RemovalPolicy.DESTROY, // dev only
     })
+
+    new CfnOutput(this, "RawBucketName", { value: this.rawBucket.bucketName })
+    new CfnOutput(this, "MarkdownBucketName", {
+      value: this.markdownBucket.bucketName,
+    })
+    new CfnOutput(this, "PageMetadataTableName", {
+      value: this.pageMetadataTable.tableName,
+    })
+
+    if (!props.deployOpenSearchAndAurora) {
+      return
+    }
 
     // --- OpenSearch: full-text/vector index over Markdown (ARD §2.6) ---
     // Single-node t3.small.search, not the Multi-AZ 3-node setup a
@@ -121,13 +141,6 @@ export class StorageStack extends Stack {
       removalPolicy: RemovalPolicy.DESTROY, // dev only
     })
 
-    new CfnOutput(this, "RawBucketName", { value: this.rawBucket.bucketName })
-    new CfnOutput(this, "MarkdownBucketName", {
-      value: this.markdownBucket.bucketName,
-    })
-    new CfnOutput(this, "PageMetadataTableName", {
-      value: this.pageMetadataTable.tableName,
-    })
     new CfnOutput(this, "OpenSearchEndpoint", {
       value: this.openSearchDomain.domainEndpoint,
     })
