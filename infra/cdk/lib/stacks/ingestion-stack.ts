@@ -38,7 +38,10 @@ export class IngestionStack extends Stack {
   public readonly jobsTable: dynamodb.Table
   public readonly priorityQueue: sqs.Queue
   public readonly bulkQueue: sqs.Queue
+  public readonly priorityDlq: sqs.Queue
+  public readonly bulkDlq: sqs.Queue
   public readonly stateMachine: sfn.StateMachine
+  public readonly routerFn: lambdaNode.NodejsFunction
 
   constructor(scope: Construct, id: string, props: IngestionStackProps) {
     super(scope, id, props)
@@ -51,20 +54,20 @@ export class IngestionStack extends Stack {
     })
 
     // --- SQS: Priority (single-URL) + Bulk (crawl) queues with DLQs (ARD §2.2, §6) ---
-    const priorityDlq = new sqs.Queue(this, "PriorityQueueDLQ", {
+    this.priorityDlq = new sqs.Queue(this, "PriorityQueueDLQ", {
       retentionPeriod: Duration.days(14),
     })
     this.priorityQueue = new sqs.Queue(this, "PriorityQueue", {
       visibilityTimeout: Duration.seconds(30),
-      deadLetterQueue: { queue: priorityDlq, maxReceiveCount: 5 },
+      deadLetterQueue: { queue: this.priorityDlq, maxReceiveCount: 5 },
     })
 
-    const bulkDlq = new sqs.Queue(this, "BulkQueueDLQ", {
+    this.bulkDlq = new sqs.Queue(this, "BulkQueueDLQ", {
       retentionPeriod: Duration.days(14),
     })
     this.bulkQueue = new sqs.Queue(this, "BulkQueue", {
       visibilityTimeout: Duration.seconds(30),
-      deadLetterQueue: { queue: bulkDlq, maxReceiveCount: 5 },
+      deadLetterQueue: { queue: this.bulkDlq, maxReceiveCount: 5 },
     })
 
     // --- Step Functions: Crawl Orchestrator (ARD §2.2) ---
@@ -138,7 +141,7 @@ export class IngestionStack extends Stack {
     this.stateMachine.grantStartExecution(schedulerRole)
 
     // --- Lambda: Request Validator + Router (ARD §2.2) ---
-    const routerFn = new lambdaNode.NodejsFunction(this, "RouterFn", {
+    this.routerFn = new lambdaNode.NodejsFunction(this, "RouterFn", {
       entry: path.join(REPO_ROOT, "services/api-router/src/handler.ts"),
       handler: "handler",
       runtime: lambda.Runtime.NODEJS_20_X,
@@ -152,9 +155,9 @@ export class IngestionStack extends Stack {
       depsLockFilePath: BUN_LOCK_FILE,
       projectRoot: REPO_ROOT,
     })
-    this.jobsTable.grantWriteData(routerFn)
-    this.priorityQueue.grantSendMessages(routerFn)
-    this.stateMachine.grantStartExecution(routerFn)
+    this.jobsTable.grantWriteData(this.routerFn)
+    this.priorityQueue.grantSendMessages(this.routerFn)
+    this.stateMachine.grantStartExecution(this.routerFn)
     // The Router will eventually call scheduler:CreateSchedule/DeleteSchedule
     // for PRD §4.8 recurring crawls; not granted yet since that handler
     // logic doesn't exist (avoids granting unused permissions).
@@ -163,7 +166,7 @@ export class IngestionStack extends Stack {
     // --- Wire HTTP API routes to the Router Lambda (EdgeStack's httpApi) ---
     const routerIntegration = new apigwv2Integrations.HttpLambdaIntegration(
       "RouterIntegration",
-      routerFn
+      this.routerFn
     )
     props.httpApi.addRoutes({
       path: "/v1/scrape",

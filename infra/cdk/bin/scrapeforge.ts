@@ -78,4 +78,14 @@ new DeliveryStack(app, stackName("DeliveryStack"), {
   notificationSenderEmail: "notifications@scrapeforge.dev",
 })
 
-new ObservabilityStack(app, stackName("ObservabilityStack"), { env, tags })
+new ObservabilityStack(app, stackName("ObservabilityStack"), {
+  env,
+  tags,
+  httpApi: edge.httpApi,
+  priorityQueue: ingestion.priorityQueue,
+  bulkQueue: ingestion.bulkQueue,
+  priorityDlq: ingestion.priorityDlq,
+  bulkDlq: ingestion.bulkDlq,
+  stateMachine: ingestion.stateMachine,
+  routerFn: ingestion.routerFn,
+})
