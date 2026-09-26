@@ -1,6 +1,5 @@
 import { Stack, type StackProps, Duration, CfnOutput } from "aws-cdk-lib"
 import * as ec2 from "aws-cdk-lib/aws-ec2"
-import * as iam from "aws-cdk-lib/aws-iam"
 import * as s3 from "aws-cdk-lib/aws-s3"
 import * as dynamodb from "aws-cdk-lib/aws-dynamodb"
 import * as events from "aws-cdk-lib/aws-events"
@@ -28,73 +27,50 @@ export interface ProcessingStackProps extends StackProps {
 
 /**
  * ARD §2.5 (Processing/LLM-Markdown Tier). TRD §11 open decision #1
- * resolved: zai.glm-4.7-flash on Bedrock, ap-south-1, ON_DEMAND.
+ * resolved: zai.glm-4.7-flash on Bedrock, ap-south-1.
  *
- * Bedrock auth is a long-term API key (bearer token), not the Lambda's
- * IAM role — an explicit choice overriding the "never create IAM users"
- * guardrail, made deliberately for this one case. Long-term Bedrock API
- * keys are IAM *service-specific credentials*, which only exist for IAM
- * users, not roles, and CloudFormation has no resource type for them at
- * all. So this stack can only get partway there:
- *   1. Creates BedrockApiKeyUser, an IAM user with an inline policy
- *      scoped to bedrock:InvokeModel/InvokeModelWithResponseStream on
- *      exactly the zai.glm-4.7-flash model ARN in this account/region —
- *      nothing else.
- *   2. Creates BedrockApiKeySecret, an *empty* Secrets Manager secret as
- *      a stable place for the key to live.
- * The credential itself must be generated out-of-band, once, via:
- *   aws iam create-service-specific-credential \
- *     --user-name <BedrockApiKeyUser physical name> \
- *     --service-name bedrock.amazonaws.com
- * then its ServicePassword written into BedrockApiKeySecret with
- * `aws secretsmanager put-secret-value`. ProcessingFn reads the secret
- * at runtime (services/processing/src/handler.ts) and passes it to
- * BedrockLLMClient as a bearer token — see packages/llm-client's
- * `apiKey` config option.
+ * Bedrock access is a pre-provisioned long-term API key against an
+ * OpenAI-compatible gateway ("Bedrock Mantle" in this account) - not
+ * the AWS SDK's BedrockRuntimeClient. That path was tried first: an IAM
+ * user + service-specific credential (bearer-token auth against the
+ * Converse/InvokeModel APIs), which is the standard way to get a
+ * long-term Bedrock API key. It hit a real, account-level wall:
+ * `aws bedrock get-foundation-model-availability` showed
+ * `authorizationStatus: NOT_AUTHORIZED` for this model — Bedrock's
+ * per-model access agreement (a EULA) hadn't been accepted for this
+ * account, which blocks model invocation regardless of IAM permissions
+ * or auth method. Accepting that agreement is a business decision, not
+ * something to do silently via CDK. The Mantle gateway sidesteps this
+ * requirement entirely and was confirmed working with a real request
+ * before being wired in here, using a key already provisioned outside
+ * this session.
+ *
+ * This stack only creates BedrockApiKeySecret, an *empty* Secrets
+ * Manager secret as a stable place for that key to live — no IAM user
+ * needed for it. Populate it once with:
+ *   aws secretsmanager put-secret-value --secret-id <this secret's ARN> \
+ *     --secret-string <the Mantle API key>
+ * ProcessingFn reads it at runtime (services/processing/src/handler.ts)
+ * and passes it to BedrockLLMClient as a bearer token against
+ * BEDROCK_BASE_URL — see packages/llm-client's config.
  */
 export class ProcessingStack extends Stack {
-  public readonly bedrockApiKeyUser: iam.User
   public readonly bedrockApiKeySecret: secretsmanager.Secret
   public readonly processingFn: lambdaNode.NodejsFunction
 
   static readonly BEDROCK_MODEL_ID = "zai.glm-4.7-flash"
+  static readonly BEDROCK_BASE_URL =
+    "https://bedrock-mantle.ap-south-1.api.aws/v1"
 
   constructor(scope: Construct, id: string, props: ProcessingStackProps) {
     super(scope, id, props)
-
-    // --- Bedrock long-term API key: scoped IAM user + placeholder secret ---
-    this.bedrockApiKeyUser = new iam.User(this, "BedrockApiKeyUser", {
-      userName: "scrapeforge-dev-bedrock-processing",
-    })
-    this.bedrockApiKeyUser.addToPolicy(
-      new iam.PolicyStatement({
-        actions: [
-          "bedrock:InvokeModel",
-          "bedrock:InvokeModelWithResponseStream",
-        ],
-        resources: [
-          `arn:aws:bedrock:${this.region}::foundation-model/${ProcessingStack.BEDROCK_MODEL_ID}`,
-        ],
-      })
-    )
-    // Separate from InvokeModel: gates whether bearer-token (long-term
-    // API key) auth is allowed at all, not tied to a specific model ARN
-    // - confirmed by testing the key directly against the Converse API
-    // (403 bedrock:CallWithBearerToken without this, even with
-    // InvokeModel already granted).
-    this.bedrockApiKeyUser.addToPolicy(
-      new iam.PolicyStatement({
-        actions: ["bedrock:CallWithBearerToken"],
-        resources: ["*"],
-      })
-    )
 
     this.bedrockApiKeySecret = new secretsmanager.Secret(
       this,
       "BedrockApiKeySecret",
       {
         description:
-          "Long-term Bedrock API key (service-specific credential) for BedrockApiKeyUser - populate manually, see class doc comment",
+          "Long-term Bedrock (Mantle gateway) API key - populate manually, see class doc comment",
       }
     )
 
@@ -114,6 +90,7 @@ export class ProcessingStack extends Stack {
         REDIS_PORT: props.redisPort,
         JOB_COMPLETE_BUS_NAME: props.jobCompleteBus.eventBusName,
         BEDROCK_MODEL_ID: ProcessingStack.BEDROCK_MODEL_ID,
+        BEDROCK_BASE_URL: ProcessingStack.BEDROCK_BASE_URL,
         BEDROCK_API_KEY_SECRET_ARN: this.bedrockApiKeySecret.secretArn,
       },
       bundling: {},
@@ -146,9 +123,6 @@ export class ProcessingStack extends Stack {
 
     new CfnOutput(this, "ProcessingFnName", {
       value: this.processingFn.functionName,
-    })
-    new CfnOutput(this, "BedrockApiKeyUserName", {
-      value: this.bedrockApiKeyUser.userName,
     })
     new CfnOutput(this, "BedrockApiKeySecretArn", {
       value: this.bedrockApiKeySecret.secretArn,

@@ -24,7 +24,7 @@ export async function structuredExtract(
   if (unmatchedFields.length > 0 && llmClient) {
     const prompt = `Extract the following fields as JSON from this page text: ${unmatchedFields.join(", ")}.\n\n${document.body.textContent?.slice(0, 8000)}`
     const completion = await llmClient.complete({
-      messages: [{ role: "user", content: [{ text: prompt }] }],
+      messages: [{ role: "user", content: prompt }],
     })
     try {
       const llmResult = JSON.parse(completion) as Record<string, string>

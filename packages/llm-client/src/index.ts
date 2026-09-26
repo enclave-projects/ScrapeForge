@@ -1,29 +1,32 @@
-import {
-  BedrockRuntimeClient,
-  ConverseCommand,
-  type Message,
-} from "@aws-sdk/client-bedrock-runtime"
-
 /**
  * Model id is config-driven (TRD §2.6, Open Decision #1) — swap via env,
  * never hardcode a specific Bedrock model id in call sites.
+ *
+ * This talks to Bedrock through an OpenAI-compatible gateway ("Bedrock
+ * Mantle" in this account), authenticated with a pre-provisioned
+ * long-term API key — not the AWS SDK's BedrockRuntimeClient. That SDK
+ * path was tried first (IAM service-specific credential, bearer-token
+ * auth against the Converse/InvokeModel APIs) and hit a real account-
+ * level block: model access wasn't authorized (EULA not accepted), a
+ * business decision outside what CDK/IAM permissions can grant. This
+ * gateway sidesteps that requirement entirely and was confirmed working
+ * with a real request before wiring it in here.
  */
 export interface LLMClientConfig {
   modelId: string
-  region?: string
-  /**
-   * Long-term Bedrock API key (bearer token, from IAM service-specific
-   * credentials against a scoped IAM user — see infra/cdk/lib/stacks/
-   * processing-stack.ts). When set, requests authenticate via
-   * Authorization: Bearer <apiKey> instead of SigV4/IAM role
-   * credentials. Omit to fall back to the Lambda's execution role.
-   */
-  apiKey?: string
+  /** e.g. https://bedrock-mantle.ap-south-1.api.aws/v1 */
+  baseUrl: string
+  apiKey: string
+}
+
+export interface LLMMessage {
+  role: "user" | "assistant" | "system"
+  content: string
 }
 
 export interface LLMCompletionRequest {
   systemPrompt?: string
-  messages: Message[]
+  messages: LLMMessage[]
   maxTokens?: number
 }
 
@@ -31,34 +34,42 @@ export interface LLMClient {
   complete(request: LLMCompletionRequest): Promise<string>
 }
 
-export class BedrockLLMClient implements LLMClient {
-  private readonly client: BedrockRuntimeClient
-  private readonly modelId: string
+interface ChatCompletionResponse {
+  choices: Array<{ message: { content: string | null } }>
+}
 
-  constructor(config: LLMClientConfig) {
-    this.client = new BedrockRuntimeClient({
-      region: config.region,
-      token: config.apiKey ? { token: config.apiKey } : undefined,
-    })
-    this.modelId = config.modelId
-  }
+export class BedrockLLMClient implements LLMClient {
+  constructor(private readonly config: LLMClientConfig) {}
 
   async complete(request: LLMCompletionRequest): Promise<string> {
-    const response = await this.client.send(
-      new ConverseCommand({
-        modelId: this.modelId,
-        messages: request.messages,
-        system: request.systemPrompt
-          ? [{ text: request.systemPrompt }]
-          : undefined,
-        inferenceConfig: { maxTokens: request.maxTokens ?? 2048 },
-      })
-    )
+    const messages: LLMMessage[] = request.systemPrompt
+      ? [{ role: "system", content: request.systemPrompt }, ...request.messages]
+      : request.messages
 
-    const content = response.output?.message?.content?.[0]
-    if (!content || !("text" in content) || !content.text) {
-      throw new Error("Bedrock response contained no text content")
+    const response = await fetch(`${this.config.baseUrl}/chat/completions`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${this.config.apiKey}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        model: this.config.modelId,
+        messages,
+        max_tokens: request.maxTokens ?? 2048,
+      }),
+    })
+
+    if (!response.ok) {
+      throw new Error(
+        `Bedrock gateway request failed: ${response.status} ${await response.text()}`
+      )
     }
-    return content.text
+
+    const data = (await response.json()) as ChatCompletionResponse
+    const content = data.choices[0]?.message.content
+    if (!content) {
+      throw new Error("Bedrock gateway response contained no text content")
+    }
+    return content
   }
 }

@@ -26,15 +26,15 @@ const eventBridge = new EventBridgeClient({})
 const MARKDOWN_BUCKET_NAME = process.env.MARKDOWN_BUCKET_NAME ?? ""
 const JOB_COMPLETE_BUS_NAME = process.env.JOB_COMPLETE_BUS_NAME ?? ""
 const BEDROCK_MODEL_ID = process.env.BEDROCK_MODEL_ID ?? ""
+const BEDROCK_BASE_URL = process.env.BEDROCK_BASE_URL ?? ""
 const BEDROCK_API_KEY_SECRET_ARN = process.env.BEDROCK_API_KEY_SECRET_ARN ?? ""
 
 let cachedLlmClient: BedrockLLMClient | undefined
 
 /**
- * Lazily builds the Bedrock client using the long-term API key stored in
- * Secrets Manager (populated out-of-band via `aws iam
- * create-service-specific-credential` — see processing-stack.ts's doc
- * comment; CloudFormation has no resource type for that credential).
+ * Lazily builds the Bedrock client using the pre-provisioned long-term
+ * API key stored in Secrets Manager (see processing-stack.ts's doc
+ * comment for why this gateway, not the AWS SDK's BedrockRuntimeClient).
  */
 async function getLlmClient(): Promise<BedrockLLMClient> {
   if (cachedLlmClient) return cachedLlmClient
@@ -43,11 +43,13 @@ async function getLlmClient(): Promise<BedrockLLMClient> {
   )
   const apiKey = secret.SecretString
   if (!apiKey) {
-    throw new Error(
-      "Bedrock API key secret is empty — has the service-specific credential been generated yet?"
-    )
+    throw new Error("Bedrock API key secret is empty")
   }
-  cachedLlmClient = new BedrockLLMClient({ modelId: BEDROCK_MODEL_ID, apiKey })
+  cachedLlmClient = new BedrockLLMClient({
+    modelId: BEDROCK_MODEL_ID,
+    baseUrl: BEDROCK_BASE_URL,
+    apiKey,
+  })
   return cachedLlmClient
 }
 
