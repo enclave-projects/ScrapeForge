@@ -112,15 +112,12 @@ export class IngestionStack extends Stack {
       lambdaFunction: frontierFn,
       // Merge the sitemap-discovery output (urls) back with the original
       // execution input (accountId, jobId, maxDepth, maxPages, ...).
-      payload: sfn.TaskInput.fromObject({
-        "accountId.$": "$$.Execution.Input.accountId",
-        "jobId.$": "$$.Execution.Input.jobId",
-        "urls.$": "$.urls",
-        "maxDepth.$": "$$.Execution.Input.maxDepth",
-        "maxPages.$": "$$.Execution.Input.maxPages",
-        "includePaths.$": "$$.Execution.Input.includePaths",
-        "excludePaths.$": "$$.Execution.Input.excludePaths",
-      }),
+      // States.JsonMerge (not individual "field.$" references) because
+      // includePaths/excludePaths are optional — referencing an absent
+      // key directly throws States.Runtime and fails the execution.
+      payload: sfn.TaskInput.fromJsonPathAt(
+        "States.JsonMerge($$.Execution.Input, $, false)"
+      ),
       outputPath: "$.Payload",
     })
 
