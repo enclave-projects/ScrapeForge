@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "build": "tsc",
+    "bundle": "esbuild src/index.ts --bundle --platform=node --target=node20 --format=esm --external:playwright --outfile=dist/index.js",
     "start": "node dist/index.js",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
@@ -18,6 +19,7 @@
   },
   "devDependencies": {
     "@types/node": "22.10.5",
-    "typescript": "~6"
+    "typescript": "~6",
+    "esbuild": "0.24.2"
   }
 }
