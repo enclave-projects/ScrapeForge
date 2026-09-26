@@ -73,6 +73,13 @@ export class FetchStack extends Stack {
       }
     )
 
+    // This environment's GitHub issues OIDC "sub" claims as
+    // repo:<owner>@<ownerId>/<repo>@<repoId>:ref:refs/heads/<branch> —
+    // numeric IDs appended to owner/repo, unlike the standard
+    // repo:<owner>/<repo>:ref:... format most GitHub docs show. Confirmed
+    // by decoding the actual token in a debug workflow step; wildcards
+    // cover the IDs so this doesn't need updating if they ever change.
+    const [githubOwner, githubRepoName] = props.githubRepo.split("/")
     this.githubActionsRole = new iam.Role(this, "GithubActionsEcrPushRole", {
       assumedBy: new iam.WebIdentityPrincipal(
         githubOidcProvider.openIdConnectProviderArn,
@@ -81,7 +88,7 @@ export class FetchStack extends Stack {
             "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
           },
           StringLike: {
-            "token.actions.githubusercontent.com:sub": `repo:${props.githubRepo}:ref:refs/heads/${props.githubRef}`,
+            "token.actions.githubusercontent.com:sub": `repo:${githubOwner}@*/${githubRepoName}@*:ref:refs/heads/${props.githubRef}`,
           },
         }
       ),
