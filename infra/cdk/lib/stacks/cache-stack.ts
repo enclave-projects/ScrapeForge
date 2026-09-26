@@ -45,7 +45,7 @@ export class CacheStack extends Stack {
 
     this.securityGroup = new ec2.SecurityGroup(this, "SecurityGroup", {
       vpc: props.vpc,
-      description: "ScrapeForge Redis — allows 6379 from within the VPC",
+      description: "ScrapeForge Redis - allows 6379 from within the VPC",
       allowAllOutbound: false,
     })
     this.securityGroup.addIngressRule(
