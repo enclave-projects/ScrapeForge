@@ -1,0 +1,28 @@
+{
+  "name": "scrapeforge",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "scrapeforge": "./bin/run.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "format": "prettier --check ."
+  },
+  "dependencies": {
+    "@oclif/core": "4.2.0",
+    "@scrapeforge/sdk": "workspace:*"
+  },
+  "devDependencies": {
+    "@oclif/test": "4.1.0",
+    "typescript": "~6"
+  },
+  "oclif": {
+    "bin": "scrapeforge",
+    "dirname": "scrapeforge",
+    "commands": "./dist/commands"
+  }
+}

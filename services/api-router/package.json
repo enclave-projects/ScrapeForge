@@ -1,0 +1,29 @@
+{
+  "name": "@scrapeforge/service-api-router",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "format": "prettier --check ."
+  },
+  "dependencies": {
+    "@aws-lambda-powertools/logger": "2.11.0",
+    "@aws-lambda-powertools/tracer": "2.11.0",
+    "@aws-lambda-powertools/metrics": "2.11.0",
+    "@aws-sdk/client-sqs": "3.1141.0",
+    "@aws-sdk/client-dynamodb": "3.1141.0",
+    "@aws-sdk/lib-dynamodb": "3.1141.0",
+    "@aws-sdk/client-sfn": "3.1141.0",
+    "@scrapeforge/shared-types": "workspace:*",
+    "zod": "3.24.1"
+  },
+  "devDependencies": {
+    "@types/aws-lambda": "8.10.147",
+    "@types/node": "22.10.5",
+    "typescript": "~6",
+    "vitest": "3.2.4",
+    "aws-sdk-client-mock": "4.1.0"
+  }
+}

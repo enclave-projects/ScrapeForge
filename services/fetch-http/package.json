@@ -1,0 +1,26 @@
+{
+  "name": "@scrapeforge/service-fetch-http",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "format": "prettier --check ."
+  },
+  "dependencies": {
+    "@aws-lambda-powertools/logger": "2.11.0",
+    "@aws-sdk/client-sqs": "3.1141.0",
+    "@aws-sdk/client-s3": "3.1141.0",
+    "@aws-sdk/client-secrets-manager": "3.1141.0",
+    "undici": "7.2.0",
+    "cheerio": "1.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "22.10.5",
+    "typescript": "~6",
+    "vitest": "3.2.4"
+  }
+}
