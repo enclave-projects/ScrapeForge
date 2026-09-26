@@ -161,7 +161,9 @@ export class FetchStack extends Stack {
     const fastHttpService = new ecs.FargateService(this, "FastHttpService", {
       cluster,
       taskDefinition: fastHttpTask,
-      desiredCount: 1,
+      // Scaling steps below cover 0 -> N and N -> 0 both, so the baseline
+      // desired count is 0: cost is $0 at idle, not a fixed always-on task.
+      desiredCount: 0,
       vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS },
       minHealthyPercent: 50,
     })
@@ -173,8 +175,8 @@ export class FetchStack extends Stack {
     fastHttpScaling.scaleOnMetric("ScaleOnPriorityQueueDepth", {
       metric: props.priorityQueue.metricApproximateNumberOfMessagesVisible(),
       scalingSteps: [
-        { upper: 0, change: 0 },
-        { lower: 1, change: +1 },
+        { upper: 1, change: -1 },
+        { lower: 1, upper: 20, change: +1 },
         { lower: 20, change: +3 },
       ],
       cooldown: Duration.seconds(60),
@@ -210,7 +212,9 @@ export class FetchStack extends Stack {
     const headlessService = new ecs.FargateService(this, "HeadlessService", {
       cluster,
       taskDefinition: headlessTask,
-      desiredCount: 1,
+      // Same reasoning as FastHttpService: symmetric scaling steps mean
+      // desiredCount 0 is a real idle state, not a placeholder.
+      desiredCount: 0,
       vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS },
       minHealthyPercent: 50,
     })
@@ -222,8 +226,8 @@ export class FetchStack extends Stack {
     headlessScaling.scaleOnMetric("ScaleOnBulkQueueDepth", {
       metric: props.bulkQueue.metricApproximateNumberOfMessagesVisible(),
       scalingSteps: [
-        { upper: 0, change: 0 },
-        { lower: 1, change: +1 },
+        { upper: 1, change: -1 },
+        { lower: 1, upper: 20, change: +1 },
         { lower: 20, change: +2 },
       ],
       cooldown: Duration.seconds(60),
