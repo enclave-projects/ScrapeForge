@@ -35,14 +35,22 @@ const network = new NetworkStack(app, stackName("NetworkStack"), {
 
 const edge = new EdgeStack(app, stackName("EdgeStack"), { env, tags })
 
-new IngestionStack(app, stackName("IngestionStack"), {
+const ingestion = new IngestionStack(app, stackName("IngestionStack"), {
   env,
   tags,
   httpApi: edge.httpApi,
   jwtAuthorizer: edge.jwtAuthorizer,
 })
 
-new FetchStack(app, stackName("FetchStack"), { env, tags, vpc: network.vpc })
+new FetchStack(app, stackName("FetchStack"), {
+  env,
+  tags,
+  vpc: network.vpc,
+  priorityQueue: ingestion.priorityQueue,
+  bulkQueue: ingestion.bulkQueue,
+  githubRepo: "enclave-projects/ScrapeForge",
+  githubRef: "claude/scrapeforge-aws-deploy-pran3g",
+})
 
 new CacheStack(app, stackName("CacheStack"), { env, tags, vpc: network.vpc })
 
