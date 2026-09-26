@@ -1,0 +1,20 @@
+{
+  "name": "@scrapeforge/infra-cdk",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "synth": "cdk synth",
+    "diff": "cdk diff",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "aws-cdk-lib": "2.173.4",
+    "constructs": "10.4.2"
+  },
+  "devDependencies": {
+    "aws-cdk": "2.173.4",
+    "typescript": "~6",
+    "@types/node": "22.10.5"
+  }
+}
