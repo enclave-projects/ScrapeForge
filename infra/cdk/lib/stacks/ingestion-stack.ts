@@ -1,5 +1,13 @@
-import { Stack, type StackProps, Duration, RemovalPolicy } from "aws-cdk-lib"
+import {
+  Stack,
+  type StackProps,
+  Duration,
+  RemovalPolicy,
+  Tags,
+} from "aws-cdk-lib"
 import * as dynamodb from "aws-cdk-lib/aws-dynamodb"
+import * as ec2 from "aws-cdk-lib/aws-ec2"
+import type * as s3 from "aws-cdk-lib/aws-s3"
 import * as sqs from "aws-cdk-lib/aws-sqs"
 import * as lambdaNode from "aws-cdk-lib/aws-lambda-nodejs"
 import * as lambda from "aws-cdk-lib/aws-lambda"
@@ -22,6 +30,10 @@ const BUN_LOCK_FILE = path.join(REPO_ROOT, "bun.lock")
 export interface IngestionStackProps extends StackProps {
   httpApi: apigwv2.HttpApi
   jwtAuthorizer: authorizers.HttpUserPoolAuthorizer
+  vpc: ec2.IVpc
+  redisEndpoint: string
+  redisPort: string
+  markdownBucket: s3.IBucket
 }
 
 /**
@@ -50,8 +62,11 @@ export class IngestionStack extends Stack {
     this.jobsTable = new dynamodb.Table(this, "JobsTable", {
       partitionKey: { name: "pk", type: dynamodb.AttributeType.STRING },
       billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      pointInTimeRecovery: true,
       removalPolicy: RemovalPolicy.DESTROY, // dev only
     })
+    // Opts into StorageStack's backup plan (tag-selected, see there).
+    Tags.of(this.jobsTable).add("scrapeforge:backup", "true")
 
     // --- SQS: Priority (single-URL) + Bulk (crawl) queues with DLQs (ARD §2.2, §6) ---
     this.priorityDlq = new sqs.Queue(this, "PriorityQueueDLQ", {
@@ -96,12 +111,16 @@ export class IngestionStack extends Stack {
       handler: "handler",
       runtime: lambda.Runtime.NODEJS_20_X,
       timeout: Duration.seconds(60),
-      environment: { BULK_QUEUE_URL: this.bulkQueue.queueUrl },
+      environment: {
+        BULK_QUEUE_URL: this.bulkQueue.queueUrl,
+        JOBS_TABLE_NAME: this.jobsTable.tableName,
+      },
       bundling: {},
       depsLockFilePath: BUN_LOCK_FILE,
       projectRoot: REPO_ROOT,
     })
     this.bulkQueue.grantSendMessages(frontierFn)
+    this.jobsTable.grantWriteData(frontierFn)
 
     const sitemapDiscoveryTask = new tasks.LambdaInvoke(
       this,
@@ -146,16 +165,24 @@ export class IngestionStack extends Stack {
       handler: "handler",
       runtime: lambda.Runtime.NODEJS_20_X,
       timeout: Duration.seconds(10),
+      // In the VPC for Redis (per-plan rate limiting); CacheStack's Redis
+      // SG already admits the whole VPC CIDR, so no extra rule needed.
+      vpc: props.vpc,
+      vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS },
       environment: {
         JOBS_TABLE_NAME: this.jobsTable.tableName,
         PRIORITY_QUEUE_URL: this.priorityQueue.queueUrl,
         CRAWL_ORCHESTRATOR_STATE_MACHINE_ARN: this.stateMachine.stateMachineArn,
+        MARKDOWN_BUCKET_NAME: props.markdownBucket.bucketName,
+        REDIS_HOST: props.redisEndpoint,
+        REDIS_PORT: props.redisPort,
       },
       bundling: {},
       depsLockFilePath: BUN_LOCK_FILE,
       projectRoot: REPO_ROOT,
     })
-    this.jobsTable.grantWriteData(this.routerFn)
+    this.jobsTable.grantReadWriteData(this.routerFn)
+    props.markdownBucket.grantRead(this.routerFn)
     this.priorityQueue.grantSendMessages(this.routerFn)
     this.stateMachine.grantStartExecution(this.routerFn)
     // The Router will eventually call scheduler:CreateSchedule/DeleteSchedule

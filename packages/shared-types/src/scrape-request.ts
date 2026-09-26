@@ -58,5 +58,33 @@ export const JobRecordSchema = z.object({
   updatedAt: z.string().datetime(),
   pagesTotal: z.number().int().optional(),
   pagesCompleted: z.number().int().optional(),
+  pagesFailed: z.number().int().optional(),
+  url: z.string().url().optional(),
+  webhookUrl: z.string().url().optional(),
+  structuredExtractSchema: z.record(z.string(), z.string()).optional(),
+  markdownS3Key: z.string().optional(),
+  /** False when the page's content was identical to the last fetch. */
+  changed: z.boolean().optional(),
 })
 export type JobRecord = z.infer<typeof JobRecordSchema>
+
+/** 202 response body for POST /v1/scrape and POST /v1/crawl. */
+export const JobAcceptedSchema = z.object({
+  jobId: z.string(),
+  status: JobStatusEnum,
+  jobType: z.enum(["single_url", "crawl"]),
+})
+export type JobAccepted = z.infer<typeof JobAcceptedSchema>
+
+/** A result file (.md, or .json for structured extraction) and a 1h signed URL. */
+export const JobResultSchema = z.object({
+  key: z.string(),
+  url: z.string().url(),
+})
+export type JobResult = z.infer<typeof JobResultSchema>
+
+/** GET /v1/jobs/{jobId} response body; results are listed once status is done. */
+export const JobStatusResponseSchema = JobRecordSchema.extend({
+  results: z.array(JobResultSchema),
+})
+export type JobStatusResponse = z.infer<typeof JobStatusResponseSchema>

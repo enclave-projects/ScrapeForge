@@ -23,6 +23,7 @@ export interface ProcessingStackProps extends StackProps {
   redisEndpoint: string
   redisPort: string
   jobCompleteBus: events.EventBus
+  jobsTable: dynamodb.ITable
 }
 
 /**
@@ -89,6 +90,7 @@ export class ProcessingStack extends Stack {
         REDIS_HOST: props.redisEndpoint,
         REDIS_PORT: props.redisPort,
         JOB_COMPLETE_BUS_NAME: props.jobCompleteBus.eventBusName,
+        JOBS_TABLE_NAME: props.jobsTable.tableName,
         BEDROCK_MODEL_ID: ProcessingStack.BEDROCK_MODEL_ID,
         BEDROCK_BASE_URL: ProcessingStack.BEDROCK_BASE_URL,
         BEDROCK_API_KEY_SECRET_ARN: this.bedrockApiKeySecret.secretArn,
@@ -101,6 +103,7 @@ export class ProcessingStack extends Stack {
     props.rawBucket.grantRead(this.processingFn)
     props.markdownBucket.grantWrite(this.processingFn)
     props.pageMetadataTable.grantReadWriteData(this.processingFn)
+    props.jobsTable.grantReadWriteData(this.processingFn)
     props.jobCompleteBus.grantPutEventsTo(this.processingFn)
     this.bedrockApiKeySecret.grantRead(this.processingFn)
     // No extra security-group rule needed: CacheStack's Redis SG already
