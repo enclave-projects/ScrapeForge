@@ -1,5 +1,6 @@
 # build output
 dist/
+cdk.out/
 
 # generated types
 .astro/

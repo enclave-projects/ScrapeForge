@@ -1,0 +1,55 @@
+name: Build & push fetch-tier images
+
+# TRD §5: container images (Fargate services) are built via Docker and
+# pushed to ECR here, then referenced by tag in CDK — CDK itself never
+# builds these images (see infra/cdk/lib/stacks/fetch-stack.ts).
+on:
+  push:
+    branches:
+      - claude/scrapeforge-aws-deploy-pran3g
+    paths:
+      - "services/fetch-http/**"
+      - "services/fetch-headless/**"
+      - ".github/workflows/build-fetch-images.yml"
+  workflow_dispatch: {}
+
+permissions:
+  id-token: write # required for OIDC -> AWS role assumption
+  contents: read
+
+env:
+  AWS_REGION: ap-south-1
+  AWS_ACCOUNT_ID: "899562467667"
+  GITHUB_ACTIONS_ROLE_ARN: arn:aws:iam::899562467667:role/ScrapeForge-dev-FetchStac-GithubActionsEcrPushRole5-y758w9j8EE99
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - service: fetch-http
+            repo: scrapeforge-fetch-http
+          - service: fetch-headless
+            repo: scrapeforge-fetch-headless
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.GITHUB_ACTIONS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - uses: aws-actions/amazon-ecr-login@v2
+        id: ecr-login
+
+      - name: Build and push image
+        env:
+          ECR_REGISTRY: ${{ steps.ecr-login.outputs.registry }}
+        run: |
+          docker build \
+            -t "$ECR_REGISTRY/${{ matrix.repo }}:${{ github.sha }}" \
+            -t "$ECR_REGISTRY/${{ matrix.repo }}:latest" \
+            services/${{ matrix.service }}
+          docker push "$ECR_REGISTRY/${{ matrix.repo }}:${{ github.sha }}"
+          docker push "$ECR_REGISTRY/${{ matrix.repo }}:latest"
