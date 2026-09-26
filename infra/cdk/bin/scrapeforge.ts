@@ -33,12 +33,13 @@ const network = new NetworkStack(app, stackName("NetworkStack"), {
   natGateways: 1,
 })
 
-new EdgeStack(app, stackName("EdgeStack"), { env, tags })
+const edge = new EdgeStack(app, stackName("EdgeStack"), { env, tags })
 
 new IngestionStack(app, stackName("IngestionStack"), {
   env,
   tags,
-  vpc: network.vpc,
+  httpApi: edge.httpApi,
+  jwtAuthorizer: edge.jwtAuthorizer,
 })
 
 new FetchStack(app, stackName("FetchStack"), { env, tags, vpc: network.vpc })
