@@ -69,6 +69,13 @@ new StorageStack(app, stackName("StorageStack"), {
   deployOpenSearchAndAurora: false,
 })
 
-new DeliveryStack(app, stackName("DeliveryStack"), { env, tags })
+new DeliveryStack(app, stackName("DeliveryStack"), {
+  env,
+  tags,
+  // Placeholder — scrapeforge.dev isn't an owned/verifiable domain, so
+  // SES verification will just sit unconfirmed. Swap in a real address
+  // you control before this stack can actually send email.
+  notificationSenderEmail: "notifications@scrapeforge.dev",
+})
 
 new ObservabilityStack(app, stackName("ObservabilityStack"), { env, tags })
