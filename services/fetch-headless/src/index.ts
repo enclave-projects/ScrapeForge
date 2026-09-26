@@ -24,6 +24,16 @@ interface FetchMessage {
   url: string
 }
 
+/** A failure retrying won't fix; recorded for the job instead of retried. */
+class PermanentFetchError extends Error {
+  constructor(
+    readonly reason: "invalid_url" | "anti_bot_block",
+    message: string
+  ) {
+    super(message)
+  }
+}
+
 async function pollLoop(): Promise<void> {
   const browser: Browser = await chromium.launch({ headless: true })
   let requestCount = 0
@@ -39,19 +49,27 @@ async function pollLoop(): Promise<void> {
       )
 
       for (const message of Messages ?? []) {
+        const body = JSON.parse(message.Body ?? "{}") as FetchMessage
+        requestCount += 1
         try {
-          const body = JSON.parse(message.Body ?? "{}") as FetchMessage
           await handleMessage(browser, body)
-          requestCount += 1
-          await sqs.send(
-            new DeleteMessageCommand({
-              QueueUrl: QUEUE_URL,
-              ReceiptHandle: message.ReceiptHandle,
-            })
-          )
         } catch (err) {
-          logger.error("Headless render failed", { error: err as Error })
+          if (!(err instanceof PermanentFetchError)) {
+            // Transient: leave the message for SQS redrive (DLQ after 5 tries).
+            logger.error("Headless render failed", {
+              error: err as Error,
+              url: body.url,
+            })
+            continue
+          }
+          await recordFailure(body, err.reason, err.message)
         }
+        await sqs.send(
+          new DeleteMessageCommand({
+            QueueUrl: QUEUE_URL,
+            ReceiptHandle: message.ReceiptHandle,
+          })
+        )
       }
     }
   } finally {
@@ -67,31 +85,70 @@ async function handleMessage(
     userAgent: "ScrapeForgeBot/1.0 (+https://scrapeforge.dev/bot)",
   })
   try {
-    await page.goto(msg.url, { waitUntil: "networkidle", timeout: 30_000 })
+    const response = await page.goto(msg.url, {
+      waitUntil: "networkidle",
+      timeout: 30_000,
+    })
+    const status = response?.status() ?? 0
+    if (status === 403 || status === 429) {
+      throw new PermanentFetchError(
+        "anti_bot_block",
+        `Blocked with status ${status} for ${msg.url}`
+      )
+    }
+    if (status >= 400 && status < 500) {
+      throw new PermanentFetchError(
+        "invalid_url",
+        `Render failed with status ${status} for ${msg.url}`
+      )
+    }
+
     const html = await page.content()
     const screenshot = await page.screenshot({ fullPage: true })
 
     const contentHash = createHash("sha256").update(html).digest("hex")
-    await s3.send(
-      new PutObjectCommand({
-        Bucket: RAW_BUCKET,
-        Key: `${msg.accountId}/${msg.jobId}/${contentHash}.html`,
-        Body: html,
-        ContentType: "text/html",
-      })
-    )
+    const metadata = { "source-url": msg.url }
+    // Screenshot first: the .html write is what triggers processing.
     await s3.send(
       new PutObjectCommand({
         Bucket: RAW_BUCKET,
         Key: `${msg.accountId}/${msg.jobId}/${contentHash}.png`,
         Body: screenshot,
         ContentType: "image/png",
+        Metadata: metadata,
+      })
+    )
+    await s3.send(
+      new PutObjectCommand({
+        Bucket: RAW_BUCKET,
+        Key: `${msg.accountId}/${msg.jobId}/${contentHash}.html`,
+        Body: html,
+        ContentType: "text/html",
+        Metadata: metadata,
       })
     )
     logger.info("Stored rendered HTML + screenshot", { url: msg.url })
   } finally {
     await page.close()
   }
+}
+
+/** See fetch-http's recordFailure: processing owns job state. */
+async function recordFailure(
+  msg: FetchMessage,
+  reason: string,
+  message: string
+): Promise<void> {
+  const urlHash = createHash("sha256").update(msg.url).digest("hex")
+  await s3.send(
+    new PutObjectCommand({
+      Bucket: RAW_BUCKET,
+      Key: `${msg.accountId}/${msg.jobId}/${urlHash}.failed.json`,
+      Body: JSON.stringify({ url: msg.url, reason, message }),
+      ContentType: "application/json",
+      Metadata: { "source-url": msg.url },
+    })
+  )
 }
 
 // Recycle the whole container once the request budget is spent — the

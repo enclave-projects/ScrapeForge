@@ -1,4 +1,5 @@
 import {
+  Tags,
   Stack,
   type StackProps,
   Duration,
@@ -8,9 +9,13 @@ import {
 import * as ec2 from "aws-cdk-lib/aws-ec2"
 import * as s3 from "aws-cdk-lib/aws-s3"
 import * as dynamodb from "aws-cdk-lib/aws-dynamodb"
+import * as backup from "aws-cdk-lib/aws-backup"
 import * as opensearch from "aws-cdk-lib/aws-opensearchservice"
 import * as rds from "aws-cdk-lib/aws-rds"
 import type { Construct } from "constructs"
+
+/** Resources tagged with this (value "true") are in the daily backup plan. */
+export const BACKUP_TAG_KEY = "scrapeforge:backup"
 
 export interface StorageStackProps extends StackProps {
   vpc: ec2.IVpc
@@ -53,6 +58,12 @@ export class StorageStack extends Stack {
       encryption: s3.BucketEncryption.S3_MANAGED,
       blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
       enforceSSL: true,
+      // Emits to the account's default EventBridge bus so ProcessingStack
+      // can react to new objects without a direct S3->Lambda notification,
+      // which would need this bucket's stack to reference the Lambda's
+      // stack (ProcessingStack already depends on this one for the
+      // bucket itself) - a cycle CloudFormation can't resolve.
+      eventBridgeEnabled: true,
       lifecycleRules: [
         {
           id: "glacier-after-30-days",
@@ -83,7 +94,20 @@ export class StorageStack extends Stack {
       partitionKey: { name: "accountId", type: dynamodb.AttributeType.STRING },
       sortKey: { name: "url", type: dynamodb.AttributeType.STRING },
       billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      pointInTimeRecovery: true,
       removalPolicy: RemovalPolicy.DESTROY, // dev only
+    })
+    Tags.of(this.pageMetadataTable).add(BACKUP_TAG_KEY, "true")
+
+    // --- DR (TRD §11 open decision #3, resolved: backups only, single
+    // region). PITR covers the last 35 days to the second; this plan adds
+    // daily snapshots kept 35 days. Selection is by tag so tables in
+    // other stacks (the Jobs table) opt in without a cross-stack ref.
+    // Markdown output is covered by its bucket's versioning; raw HTML is
+    // re-fetchable and deliberately not backed up. ---
+    const backupPlan = backup.BackupPlan.daily35DayRetention(this, "BackupPlan")
+    backupPlan.addSelection("TaggedTables", {
+      resources: [backup.BackupResource.fromTag(BACKUP_TAG_KEY, "true")],
     })
 
     new CfnOutput(this, "RawBucketName", { value: this.rawBucket.bucketName })

@@ -28,3 +28,12 @@ yarn-error.log*
 
 # typescript
 *.tsbuildinfo
+
+# next.js
+.next/
+out/
+
+# python
+.venv/
+__pycache__/
+.pytest_cache/

@@ -2,10 +2,9 @@ import { Stack, type StackProps, Duration, CfnOutput } from "aws-cdk-lib"
 import * as events from "aws-cdk-lib/aws-events"
 import * as targets from "aws-cdk-lib/aws-events-targets"
 import * as sns from "aws-cdk-lib/aws-sns"
-import * as ses from "aws-cdk-lib/aws-ses"
+import * as secretsmanager from "aws-cdk-lib/aws-secretsmanager"
 import * as lambdaNode from "aws-cdk-lib/aws-lambda-nodejs"
 import * as lambda from "aws-cdk-lib/aws-lambda"
-import * as iam from "aws-cdk-lib/aws-iam"
 import type { Construct } from "constructs"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
@@ -16,21 +15,22 @@ const BUN_LOCK_FILE = path.join(REPO_ROOT, "bun.lock")
 
 export interface DeliveryStackProps extends StackProps {
   /**
-   * Sender address for job-completion emails. SES starts every new
-   * account in sandbox mode (can only send to/from verified identities),
-   * and this stack can only request verification, not complete it — an
-   * email/link confirmation only the account owner can click. Until
-   * that happens (and until SES production access is requested for this
-   * account), SES sends here will fail. Not a bug, an external step.
+   * "Name <address>" sender for job-completion emails, sent via Resend.
+   * The address must be on a domain verified in the Resend account.
    */
-  notificationSenderEmail: string
+  notificationSender: string
 }
 
 /**
- * ARD §2.7 (Delivery): job-complete EventBridge bus, SNS webhook fanout,
- * SES email notifications for long-running jobs. Consumed by the
- * existing services/delivery/src/notify.ts Lambda (already written,
- * just not deployed until now).
+ * ARD §2.7 (Delivery): job-complete EventBridge bus, SNS internal fanout,
+ * direct webhook POSTs, and email notifications for long-running jobs.
+ *
+ * Email goes through Resend, not SES: SES in this account is in sandbox
+ * with no verified identity, while the Resend account already has a
+ * verified sending domain. The API key lives in ResendApiKeySecret,
+ * created empty here and populated once out-of-band:
+ *   aws secretsmanager put-secret-value --secret-id <ResendApiKeySecretArn> \
+ *     --secret-string <resend api key>
  */
 export class DeliveryStack extends Stack {
   public readonly jobCompleteBus: events.EventBus
@@ -49,13 +49,16 @@ export class DeliveryStack extends Stack {
       displayName: "ScrapeForge webhook fanout",
     })
 
-    // --- SES: email notifications for long-running jobs (ARD §2.7) ---
-    // Verification request only — see notificationSenderEmail doc comment.
-    new ses.EmailIdentity(this, "SenderIdentity", {
-      identity: ses.Identity.email(props.notificationSenderEmail),
-    })
+    const resendApiKeySecret = new secretsmanager.Secret(
+      this,
+      "ResendApiKeySecret",
+      {
+        description:
+          "Resend API key for job-completion email - populate manually, see class doc comment",
+      }
+    )
 
-    // --- Lambda: consumes the bus, fans out to SNS + SES ---
+    // --- Lambda: consumes the bus, fans out to SNS, webhooks, email ---
     const notifyFn = new lambdaNode.NodejsFunction(this, "NotifyFn", {
       entry: path.join(REPO_ROOT, "services/delivery/src/notify.ts"),
       handler: "handler",
@@ -63,19 +66,15 @@ export class DeliveryStack extends Stack {
       timeout: Duration.seconds(10),
       environment: {
         WEBHOOK_TOPIC_ARN: this.webhookTopic.topicArn,
-        NOTIFICATION_SENDER_EMAIL: props.notificationSenderEmail,
+        NOTIFICATION_SENDER: props.notificationSender,
+        RESEND_API_KEY_SECRET_ARN: resendApiKeySecret.secretArn,
       },
       bundling: {},
       depsLockFilePath: BUN_LOCK_FILE,
       projectRoot: REPO_ROOT,
     })
     this.webhookTopic.grantPublish(notifyFn)
-    notifyFn.addToRolePolicy(
-      new iam.PolicyStatement({
-        actions: ["ses:SendEmail"],
-        resources: ["*"],
-      })
-    )
+    resendApiKeySecret.grantRead(notifyFn)
 
     new events.Rule(this, "JobCompleteRule", {
       eventBus: this.jobCompleteBus,
@@ -85,6 +84,9 @@ export class DeliveryStack extends Stack {
 
     new CfnOutput(this, "JobCompleteBusName", {
       value: this.jobCompleteBus.eventBusName,
+    })
+    new CfnOutput(this, "ResendApiKeySecretArn", {
+      value: resendApiKeySecret.secretArn,
     })
     new CfnOutput(this, "WebhookTopicArn", {
       value: this.webhookTopic.topicArn,

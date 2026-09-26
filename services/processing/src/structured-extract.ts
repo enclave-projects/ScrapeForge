@@ -24,10 +24,15 @@ export async function structuredExtract(
   if (unmatchedFields.length > 0 && llmClient) {
     const prompt = `Extract the following fields as JSON from this page text: ${unmatchedFields.join(", ")}.\n\n${document.body.textContent?.slice(0, 8000)}`
     const completion = await llmClient.complete({
-      messages: [{ role: "user", content: [{ text: prompt }] }],
+      messages: [{ role: "user", content: prompt }],
     })
     try {
-      const llmResult = JSON.parse(completion) as Record<string, string>
+      // Models routinely wrap JSON in markdown code fences (```json ... ```)
+      // despite being asked for raw JSON — strip them before parsing.
+      const jsonText = completion
+        .replace(/^```(?:json)?\s*|\s*```$/g, "")
+        .trim()
+      const llmResult = JSON.parse(jsonText) as Record<string, string>
       for (const field of unmatchedFields) {
         result[field] = llmResult[field] ?? null
       }

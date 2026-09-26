@@ -35,32 +35,13 @@ const network = new NetworkStack(app, stackName("NetworkStack"), {
 
 const edge = new EdgeStack(app, stackName("EdgeStack"), { env, tags })
 
-const ingestion = new IngestionStack(app, stackName("IngestionStack"), {
-  env,
-  tags,
-  httpApi: edge.httpApi,
-  jwtAuthorizer: edge.jwtAuthorizer,
-})
-
-new FetchStack(app, stackName("FetchStack"), {
-  env,
-  tags,
-  vpc: network.vpc,
-  priorityQueue: ingestion.priorityQueue,
-  bulkQueue: ingestion.bulkQueue,
-  githubRepo: "enclave-projects/ScrapeForge",
-  githubRef: "claude/scrapeforge-aws-deploy-pran3g",
-})
-
-new CacheStack(app, stackName("CacheStack"), { env, tags, vpc: network.vpc })
-
-new ProcessingStack(app, stackName("ProcessingStack"), {
+const cache = new CacheStack(app, stackName("CacheStack"), {
   env,
   tags,
   vpc: network.vpc,
 })
 
-new StorageStack(app, stackName("StorageStack"), {
+const storage = new StorageStack(app, stackName("StorageStack"), {
   env,
   tags,
   vpc: network.vpc,
@@ -69,13 +50,46 @@ new StorageStack(app, stackName("StorageStack"), {
   deployOpenSearchAndAurora: false,
 })
 
-new DeliveryStack(app, stackName("DeliveryStack"), {
+const ingestion = new IngestionStack(app, stackName("IngestionStack"), {
   env,
   tags,
-  // Placeholder — scrapeforge.dev isn't an owned/verifiable domain, so
-  // SES verification will just sit unconfirmed. Swap in a real address
-  // you control before this stack can actually send email.
-  notificationSenderEmail: "notifications@scrapeforge.dev",
+  httpApi: edge.httpApi,
+  jwtAuthorizer: edge.jwtAuthorizer,
+  vpc: network.vpc,
+  redisEndpoint: cache.redisEndpoint,
+  redisPort: cache.redisPort,
+  markdownBucket: storage.markdownBucket,
+})
+
+new FetchStack(app, stackName("FetchStack"), {
+  env,
+  tags,
+  vpc: network.vpc,
+  priorityQueue: ingestion.priorityQueue,
+  bulkQueue: ingestion.bulkQueue,
+  rawBucket: storage.rawBucket,
+  githubRepo: "enclave-projects/ScrapeForge",
+  githubRef: "claude/scrapeforge-aws-deploy-pran3g",
+})
+
+const delivery = new DeliveryStack(app, stackName("DeliveryStack"), {
+  env,
+  tags,
+  // enclaveprojects.dev is the verified sending domain in the Resend account.
+  notificationSender: "ScrapeForge <notifications@enclaveprojects.dev>",
+})
+
+new ProcessingStack(app, stackName("ProcessingStack"), {
+  env,
+  tags,
+  vpc: network.vpc,
+  rawBucket: storage.rawBucket,
+  markdownBucket: storage.markdownBucket,
+  pageMetadataTable: storage.pageMetadataTable,
+  redisEndpoint: cache.redisEndpoint,
+  redisPort: cache.redisPort,
+  jobCompleteBus: delivery.jobCompleteBus,
+  jobsTable: ingestion.jobsTable,
 })
 
 new ObservabilityStack(app, stackName("ObservabilityStack"), {

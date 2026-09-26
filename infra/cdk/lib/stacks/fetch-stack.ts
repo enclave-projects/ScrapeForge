@@ -12,12 +12,14 @@ import * as iam from "aws-cdk-lib/aws-iam"
 import * as secretsmanager from "aws-cdk-lib/aws-secretsmanager"
 import * as applicationautoscaling from "aws-cdk-lib/aws-applicationautoscaling"
 import type * as sqs from "aws-cdk-lib/aws-sqs"
+import type * as s3 from "aws-cdk-lib/aws-s3"
 import type { Construct } from "constructs"
 
 export interface FetchStackProps extends StackProps {
   vpc: ec2.IVpc
   priorityQueue: sqs.IQueue
   bulkQueue: sqs.IQueue
+  rawBucket: s3.IBucket
   /** GitHub repo allowed to assume the CI push role, "owner/repo" form. */
   githubRepo: string
   /** Git ref (e.g. a branch) allowed to assume the CI push role. */
@@ -145,8 +147,8 @@ export class FetchStack extends Stack {
       logging: ecs.LogDrivers.awsLogs({ streamPrefix: "fetch-http" }),
       environment: {
         QUEUE_URL: props.priorityQueue.queueUrl,
-        RAW_HTML_BUCKET_NAME: "", // wired once StorageStack exists
-        HEADLESS_QUEUE_URL: props.bulkQueue.queueUrl, // placeholder handoff path
+        RAW_HTML_BUCKET_NAME: props.rawBucket.bucketName,
+        HEADLESS_QUEUE_URL: props.bulkQueue.queueUrl,
       },
       secrets: {
         PROXY_CREDENTIALS: ecs.Secret.fromSecretsManager(
@@ -156,6 +158,8 @@ export class FetchStack extends Stack {
     })
     void fastHttpContainer
     props.priorityQueue.grantConsumeMessages(fastHttpTask.taskRole)
+    props.bulkQueue.grantSendMessages(fastHttpTask.taskRole)
+    props.rawBucket.grantPut(fastHttpTask.taskRole)
     proxyCredentialsSecret.grantRead(fastHttpTask.taskRole)
 
     const fastHttpService = new ecs.FargateService(this, "FastHttpService", {
@@ -197,7 +201,7 @@ export class FetchStack extends Stack {
       logging: ecs.LogDrivers.awsLogs({ streamPrefix: "fetch-headless" }),
       environment: {
         QUEUE_URL: props.bulkQueue.queueUrl,
-        RAW_HTML_BUCKET_NAME: "", // wired once StorageStack exists
+        RAW_HTML_BUCKET_NAME: props.rawBucket.bucketName,
       },
       secrets: {
         PROXY_CREDENTIALS: ecs.Secret.fromSecretsManager(
@@ -207,6 +211,7 @@ export class FetchStack extends Stack {
     })
     void headlessContainer
     props.bulkQueue.grantConsumeMessages(headlessTask.taskRole)
+    props.rawBucket.grantPut(headlessTask.taskRole)
     proxyCredentialsSecret.grantRead(headlessTask.taskRole)
 
     const headlessService = new ecs.FargateService(this, "HeadlessService", {

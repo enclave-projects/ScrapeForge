@@ -2,30 +2,39 @@ import { Stack, type StackProps, CfnOutput } from "aws-cdk-lib"
 import * as cognito from "aws-cdk-lib/aws-cognito"
 import * as apigwv2 from "aws-cdk-lib/aws-apigatewayv2"
 import * as authorizers from "aws-cdk-lib/aws-apigatewayv2-authorizers"
+import * as wafv2 from "aws-cdk-lib/aws-wafv2"
+import * as amplify from "aws-cdk-lib/aws-amplify"
 import type { Construct } from "constructs"
 
 /**
  * ARD §2.1 (Edge/Perimeter): CloudFront, WAF, API Gateway (HTTP + WebSocket
  * APIs via aws-apigatewayv2 per TRD §2.1), Cognito.
  *
- * CloudFront and WAF are TEMPORARILY OMITTED from this stack:
- * - CloudFront: this AWS account is not yet verified for CloudFront usage
- *   ("Access denied ... Your account must be verified ... contact AWS
- *   Support"). Needs an AWS Support case before it can be added back.
- * - WAF: AWS::WAFv2::WebACLAssociation does not support HttpApi (v2) at
- *   all — only REST API v1 stages, ALB, CloudFront, AppSync, Cognito.
- *   Once CloudFront is unblocked, WAF should attach there instead (as a
- *   CLOUDFRONT-scope WebACL, which AWS requires to live in us-east-1
- *   regardless of this stack's region — a cross-region construct not yet
- *   built) rather than directly on the HTTP API stage.
+ * CloudFront is unavailable: this AWS account isn't verified for it
+ * ("Your account must be verified ... contact AWS Support"). Until an
+ * AWS Support case clears that, the edge works without it:
+ * - The HTTP API is served directly from its regional execute-api
+ *   endpoint, with a stage-wide throttle as a cost/abuse ceiling. That's
+ *   an aggregate cap, not per-client: per-account limits are enforced by
+ *   the Router Lambda (per-plan token buckets in Redis).
+ * - WAF can't attach to an HTTP API (WAFv2 supports REST API stages,
+ *   ALB, CloudFront, AppSync, Cognito, App Runner, Verified Access), so
+ *   a REGIONAL WebACL guards the Cognito user pool instead: a per-IP
+ *   rate rule against sign-up/sign-in brute force and bulk sign-ups,
+ *   which is the unauthenticated surface. Every API route already
+ *   requires a valid Cognito JWT, rejected at API Gateway before any
+ *   Lambda runs.
+ * - The dashboard (a static Next.js export) is hosted on Amplify
+ *   Hosting, which serves HTTPS from AWS-managed infrastructure and so
+ *   needs no CloudFront distribution in this account. Content is pushed
+ *   with a manual deployment (no Git connection), see DashboardAppId.
+ * Once CloudFront is unblocked, a CLOUDFRONT-scope WebACL (us-east-1)
+ * in front of both would replace this.
  *
- * Other open items intentionally NOT decided here (flagged rather than
- * guessed):
- * - Dashboard static/SSR hosting is undecided — the TRD specifies Next.js
- *   for apps/dashboard but not how it's hosted, so nothing fronts it yet.
- * - Per-plan-tier rate-limit values (TRD §11 open decision #4) are still
- *   unset; when WAF comes back its rate-based rule limit is a separate,
- *   edge-level anti-abuse value, not the product's per-plan API limit.
+ * Also:
+ * - Per-plan API limits (TRD §11 #4) live in services/api-router, not
+ *   here; the throttle and WAF values below are edge-level anti-abuse
+ *   ceilings, a separate concern.
  * - Shield Standard is automatic on CloudFront/API Gateway and has no CDK
  *   resource; Shield Advanced (paid, ~$3,000/mo) is not enabled.
  */
@@ -97,11 +106,66 @@ export class EdgeStack extends Stack {
       autoDeploy: true,
     })
 
-    // WAF and CloudFront deliberately omitted — see class doc comment.
+    // Aggregate ceiling for the whole API (AWS's account default is
+    // 10,000 rps): comfortably above many accounts at the top plan's
+    // 100 rps, low enough to cap runaway cost.
+    const defaultStage = this.httpApi.defaultStage?.node
+      .defaultChild as apigwv2.CfnStage
+    defaultStage.defaultRouteSettings = {
+      throttlingRateLimit: 1000,
+      throttlingBurstLimit: 2000,
+    }
+
+    // --- WAF on Cognito (see class doc comment for why not the API) ---
+    const authWebAcl = new wafv2.CfnWebACL(this, "AuthWebAcl", {
+      scope: "REGIONAL",
+      defaultAction: { allow: {} },
+      visibilityConfig: {
+        cloudWatchMetricsEnabled: true,
+        metricName: "scrapeforge-auth",
+        sampledRequestsEnabled: true,
+      },
+      rules: [
+        {
+          name: "PerIpRateLimit",
+          priority: 0,
+          action: { block: {} },
+          // Requests per IP per 5-minute window; generous for real
+          // sign-ins (token refreshes included), blocks scripted abuse.
+          statement: {
+            rateBasedStatement: { limit: 300, aggregateKeyType: "IP" },
+          },
+          visibilityConfig: {
+            cloudWatchMetricsEnabled: true,
+            metricName: "scrapeforge-auth-rate-limit",
+            sampledRequestsEnabled: true,
+          },
+        },
+      ],
+    })
+    new wafv2.CfnWebACLAssociation(this, "AuthWebAclAssociation", {
+      resourceArn: this.userPool.userPoolArn,
+      webAclArn: authWebAcl.attrArn,
+    })
+
+    // --- Dashboard hosting (static export, manual deployments) ---
+    const dashboardApp = new amplify.CfnApp(this, "DashboardApp", {
+      name: "scrapeforge-dashboard",
+      platform: "WEB",
+    })
+    const dashboardBranch = new amplify.CfnBranch(this, "DashboardBranch", {
+      appId: dashboardApp.attrAppId,
+      branchName: "main",
+      stage: "DEVELOPMENT",
+    })
 
     new CfnOutput(this, "HttpApiUrl", { value: this.httpApi.apiEndpoint })
     new CfnOutput(this, "WebSocketApiUrl", {
       value: this.webSocketApi.apiEndpoint,
+    })
+    new CfnOutput(this, "DashboardAppId", { value: dashboardApp.attrAppId })
+    new CfnOutput(this, "DashboardUrl", {
+      value: `https://${dashboardBranch.branchName}.${dashboardApp.attrDefaultDomain}`,
     })
     new CfnOutput(this, "UserPoolId", { value: this.userPool.userPoolId })
     new CfnOutput(this, "UserPoolClientId", {

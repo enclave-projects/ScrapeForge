@@ -12,16 +12,27 @@ export default class Scrape extends Command {
   static flags = {
     "render-js": Flags.boolean({ description: "Force headless JS rendering" }),
     "api-key": Flags.string({ env: "SCRAPEFORGE_API_KEY", required: true }),
+    "base-url": Flags.string({ env: "SCRAPEFORGE_BASE_URL" }),
   }
 
   async run(): Promise<void> {
     const { args, flags } = await this.parse(Scrape)
-    const client = new ScrapeForgeClient({ apiKey: flags["api-key"] })
-    const result = await client.scrape({
+    const client = new ScrapeForgeClient({
+      apiKey: flags["api-key"],
+      baseUrl: flags["base-url"],
+    })
+    const { jobId } = await client.scrape({
       url: args.url,
       renderJs: flags["render-js"],
       llmCleanup: false,
     })
-    this.log(JSON.stringify(result.data, null, 2))
+    const job = await client.waitForJob(jobId)
+    if (job.status === "failed") {
+      this.error(`Job ${jobId} failed: ${job.errorReason ?? "unknown"}`)
+    }
+    const markdown = job.results.find((r) => r.key.endsWith(".md"))
+    if (!markdown) this.error(`Job ${jobId} finished without a result`)
+    const response = await fetch(markdown.url)
+    this.log(await response.text())
   }
 }
