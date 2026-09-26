@@ -53,6 +53,12 @@ export class StorageStack extends Stack {
       encryption: s3.BucketEncryption.S3_MANAGED,
       blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
       enforceSSL: true,
+      // Emits to the account's default EventBridge bus so ProcessingStack
+      // can react to new objects without a direct S3->Lambda notification,
+      // which would need this bucket's stack to reference the Lambda's
+      // stack (ProcessingStack already depends on this one for the
+      // bucket itself) - a cycle CloudFormation can't resolve.
+      eventBridgeEnabled: true,
       lifecycleRules: [
         {
           id: "glacier-after-30-days",

@@ -52,15 +52,13 @@ new FetchStack(app, stackName("FetchStack"), {
   githubRef: "claude/scrapeforge-aws-deploy-pran3g",
 })
 
-new CacheStack(app, stackName("CacheStack"), { env, tags, vpc: network.vpc })
-
-new ProcessingStack(app, stackName("ProcessingStack"), {
+const cache = new CacheStack(app, stackName("CacheStack"), {
   env,
   tags,
   vpc: network.vpc,
 })
 
-new StorageStack(app, stackName("StorageStack"), {
+const storage = new StorageStack(app, stackName("StorageStack"), {
   env,
   tags,
   vpc: network.vpc,
@@ -69,13 +67,25 @@ new StorageStack(app, stackName("StorageStack"), {
   deployOpenSearchAndAurora: false,
 })
 
-new DeliveryStack(app, stackName("DeliveryStack"), {
+const delivery = new DeliveryStack(app, stackName("DeliveryStack"), {
   env,
   tags,
   // Placeholder — scrapeforge.dev isn't an owned/verifiable domain, so
   // SES verification will just sit unconfirmed. Swap in a real address
   // you control before this stack can actually send email.
   notificationSenderEmail: "notifications@scrapeforge.dev",
+})
+
+new ProcessingStack(app, stackName("ProcessingStack"), {
+  env,
+  tags,
+  vpc: network.vpc,
+  rawBucket: storage.rawBucket,
+  markdownBucket: storage.markdownBucket,
+  pageMetadataTable: storage.pageMetadataTable,
+  redisEndpoint: cache.redisEndpoint,
+  redisPort: cache.redisPort,
+  jobCompleteBus: delivery.jobCompleteBus,
 })
 
 new ObservabilityStack(app, stackName("ObservabilityStack"), {

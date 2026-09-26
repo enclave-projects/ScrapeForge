@@ -11,6 +11,14 @@ import {
 export interface LLMClientConfig {
   modelId: string
   region?: string
+  /**
+   * Long-term Bedrock API key (bearer token, from IAM service-specific
+   * credentials against a scoped IAM user — see infra/cdk/lib/stacks/
+   * processing-stack.ts). When set, requests authenticate via
+   * Authorization: Bearer <apiKey> instead of SigV4/IAM role
+   * credentials. Omit to fall back to the Lambda's execution role.
+   */
+  apiKey?: string
 }
 
 export interface LLMCompletionRequest {
@@ -28,7 +36,10 @@ export class BedrockLLMClient implements LLMClient {
   private readonly modelId: string
 
   constructor(config: LLMClientConfig) {
-    this.client = new BedrockRuntimeClient({ region: config.region })
+    this.client = new BedrockRuntimeClient({
+      region: config.region,
+      token: config.apiKey ? { token: config.apiKey } : undefined,
+    })
     this.modelId = config.modelId
   }
 

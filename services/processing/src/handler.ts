@@ -1,0 +1,142 @@
+import { Logger } from "@aws-lambda-powertools/logger"
+import {
+  S3Client,
+  GetObjectCommand,
+  PutObjectCommand,
+} from "@aws-sdk/client-s3"
+import {
+  SecretsManagerClient,
+  GetSecretValueCommand,
+} from "@aws-sdk/client-secrets-manager"
+import {
+  EventBridgeClient,
+  PutEventsCommand,
+} from "@aws-sdk/client-eventbridge"
+import type { S3Event } from "aws-lambda"
+import { BedrockLLMClient } from "@scrapeforge/llm-client"
+import { stripBoilerplate } from "./readability-strip.js"
+import { convertToMarkdown } from "./markdown-converter.js"
+import { checkDedup, recordPageMetadata } from "./dedup.js"
+
+const logger = new Logger({ serviceName: "processing" })
+const s3 = new S3Client({})
+const secretsManager = new SecretsManagerClient({})
+const eventBridge = new EventBridgeClient({})
+
+const MARKDOWN_BUCKET_NAME = process.env.MARKDOWN_BUCKET_NAME ?? ""
+const JOB_COMPLETE_BUS_NAME = process.env.JOB_COMPLETE_BUS_NAME ?? ""
+const BEDROCK_MODEL_ID = process.env.BEDROCK_MODEL_ID ?? ""
+const BEDROCK_API_KEY_SECRET_ARN = process.env.BEDROCK_API_KEY_SECRET_ARN ?? ""
+
+let cachedLlmClient: BedrockLLMClient | undefined
+
+/**
+ * Lazily builds the Bedrock client using the long-term API key stored in
+ * Secrets Manager (populated out-of-band via `aws iam
+ * create-service-specific-credential` — see processing-stack.ts's doc
+ * comment; CloudFormation has no resource type for that credential).
+ */
+async function getLlmClient(): Promise<BedrockLLMClient> {
+  if (cachedLlmClient) return cachedLlmClient
+  const secret = await secretsManager.send(
+    new GetSecretValueCommand({ SecretId: BEDROCK_API_KEY_SECRET_ARN })
+  )
+  const apiKey = secret.SecretString
+  if (!apiKey) {
+    throw new Error(
+      "Bedrock API key secret is empty — has the service-specific credential been generated yet?"
+    )
+  }
+  cachedLlmClient = new BedrockLLMClient({ modelId: BEDROCK_MODEL_ID, apiKey })
+  return cachedLlmClient
+}
+
+/**
+ * ARD §3 steps 8-13: triggered by S3 ObjectCreated on the raw HTML
+ * bucket. Strips boilerplate, checks dedup (short-circuits if
+ * unchanged), converts to Markdown, stores the result, and publishes a
+ * job-complete event. Structured extraction / Textract / Rekognition
+ * are config-driven branches (PRD §4.4-§4.6) not wired into this initial
+ * pass — the pipeline's core path works end-to-end first.
+ */
+export const handler = async (event: S3Event): Promise<void> => {
+  for (const record of event.Records) {
+    const bucket = record.s3.bucket.name
+    const key = decodeURIComponent(record.s3.object.key.replace(/\+/g, " "))
+    const [accountId, jobId] = key.split("/")
+
+    if (!accountId || !jobId) {
+      logger.warn("Skipping object with unexpected key shape", { key })
+      continue
+    }
+
+    const raw = await s3.send(
+      new GetObjectCommand({ Bucket: bucket, Key: key })
+    )
+    const html = (await raw.Body?.transformToString()) ?? ""
+    const sourceUrl = raw.Metadata?.["source-url"] ?? ""
+
+    const { contentHtml } = stripBoilerplate(
+      html,
+      sourceUrl || "https://unknown.invalid"
+    )
+    const dedupResult = await checkDedup(accountId, sourceUrl, contentHtml)
+
+    if (dedupResult.unchanged) {
+      logger.info("Content unchanged, skipping reprocessing", {
+        sourceUrl,
+        jobId,
+      })
+      continue
+    }
+
+    const scrapedAt = new Date().toISOString()
+    const markdown = convertToMarkdown(contentHtml, {
+      source_url: sourceUrl,
+      scraped_at: scrapedAt,
+      content_hash: dedupResult.contentHash,
+    })
+
+    const markdownKey = `${accountId}/${jobId}/${dedupResult.contentHash.replace("sha256:", "")}.md`
+    await s3.send(
+      new PutObjectCommand({
+        Bucket: MARKDOWN_BUCKET_NAME,
+        Key: markdownKey,
+        Body: markdown,
+        ContentType: "text/markdown",
+      })
+    )
+
+    await recordPageMetadata({
+      accountId,
+      url: sourceUrl,
+      contentHash: dedupResult.contentHash,
+      lastFetchedAt: scrapedAt,
+      lastChangedAt: scrapedAt,
+      markdownS3Key: markdownKey,
+      rawHtmlS3Key: key,
+    })
+
+    void getLlmClient // wired for structured-extract's Bedrock fallback once that branch is enabled
+
+    await eventBridge.send(
+      new PutEventsCommand({
+        Entries: [
+          {
+            Source: "scrapeforge",
+            DetailType: "JobComplete",
+            EventBusName: JOB_COMPLETE_BUS_NAME,
+            Detail: JSON.stringify({
+              accountId,
+              jobId,
+              jobType: "single_url",
+              markdownS3Key: markdownKey,
+            }),
+          },
+        ],
+      })
+    )
+
+    logger.info("Processed page", { sourceUrl, jobId, markdownKey })
+  }
+}
