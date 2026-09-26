@@ -161,7 +161,7 @@ export class FetchStack extends Stack {
     const fastHttpService = new ecs.FargateService(this, "FastHttpService", {
       cluster,
       taskDefinition: fastHttpTask,
-      desiredCount: 0, // no image pushed yet — see class doc comment
+      desiredCount: 1,
       vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS },
       minHealthyPercent: 50,
     })
@@ -210,7 +210,7 @@ export class FetchStack extends Stack {
     const headlessService = new ecs.FargateService(this, "HeadlessService", {
       cluster,
       taskDefinition: headlessTask,
-      desiredCount: 0, // no image pushed yet — see class doc comment
+      desiredCount: 1,
       vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS },
       minHealthyPercent: 50,
     })
