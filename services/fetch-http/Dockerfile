@@ -10,4 +10,4 @@ RUN npm run bundle
 FROM node:20-slim
 WORKDIR /app
 COPY --from=base /app/dist ./dist
-CMD ["node", "dist/index.js"]
+CMD ["node", "dist/index.cjs"]
